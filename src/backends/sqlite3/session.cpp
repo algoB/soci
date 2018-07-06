@@ -17,6 +17,8 @@
 #pragma warning(disable:4355)
 #endif
 
+#include <iostream>
+
 using namespace soci;
 using namespace soci::details;
 using namespace sqlite_api;
@@ -62,8 +64,11 @@ sqlite3_session_backend::sqlite3_session_backend(
     std::string const & connectString = parameters.get_connect_string();
     std::string dbname(connectString);
     std::stringstream ssconn(connectString);
-    while (!ssconn.eof() && ssconn.str().find('=') != std::string::npos)
+    bool useOld = false;
+    // Change detection clause so we can use the old SOCI style connection parameters
+    while (!ssconn.eof() && ssconn.str().find(' ') != std::string::npos && ssconn.str().find('=') != std::string::npos)
     {
+        useOld = true;
         std::string key, val;
         std::getline(ssconn, key, '=');
         std::getline(ssconn, val, ' ');
@@ -102,23 +107,31 @@ sqlite3_session_backend::sqlite3_session_backend(
         }
         else if ("shared_cache" == key && "true" == val)
         {
-            connection_flags |=  SQLITE_OPEN_SHAREDCACHE;
+            connection_flags |= SQLITE_OPEN_SHAREDCACHE;
         }
     }
 
-    int res = sqlite3_open_v2(dbname.c_str(), &conn_, connection_flags, NULL);
-    check_sqlite_err(conn_, res, "Cannot establish connection to the database. ");
+    int res;
+    if (useOld) {
+        res = sqlite3_open_v2(dbname.c_str(), &conn_, connection_flags, NULL);
+        check_sqlite_err(conn_, res, "Cannot establish connection to the database. ");
 
-    if (!synchronous.empty())
-    {
-        std::string const query("pragma synchronous=" + synchronous);
-        std::string const errMsg("Query failed: " + query);
-        execude_hardcoded(conn_, query.c_str(), errMsg.c_str());
+        if (!synchronous.empty())
+        {
+            std::string const query("pragma synchronous=" + synchronous);
+            std::string const errMsg("Query failed: " + query);
+            execude_hardcoded(conn_, query.c_str(), errMsg.c_str());
+        }
+
+        res = sqlite3_busy_timeout(conn_, timeout * 1000);
+        check_sqlite_err(conn_, res, "Failed to set busy timeout for connection. ");
+
     }
-
-    res = sqlite3_busy_timeout(conn_, timeout * 1000);
-    check_sqlite_err(conn_, res, "Failed to set busy timeout for connection. ");
-
+    else {
+        sqlite3_config(SQLITE_CONFIG_URI,1);
+        res = sqlite3_open(dbname.c_str(), &conn_);
+        check_sqlite_err(conn_, res, "Cannot establish connection to the database. ");
+    }
 }
 
 sqlite3_session_backend::~sqlite3_session_backend()
